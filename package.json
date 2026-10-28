@@ -1,0 +1,17 @@
+{
+ "name": "agent-action-gate",
+ "version": "0.2.0",
+ "type": "module",
+ "private": true,
+ "license": "MIT",
+ "scripts": {
+  "build": "tsc -p .",
+  "test": "tsc -p . && node --test dist/test/",
+  "demo": "tsc -p . && node dist/src/demo.js",
+  "start": "tsc -p . && node dist/src/server.js"
+ },
+ "devDependencies": {
+  "typescript": "^5.9.3",
+  "@types/node": "^20.19.43"
+ }
+}

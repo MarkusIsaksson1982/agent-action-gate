@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>agent-action-gate – web operations console (demo)</title>
+<style>body{font:15px/1.45 system-ui,sans-serif;max-width:980px;margin:2rem auto;padding:0 1rem;color:#1d2330}
+button{margin:.2rem;padding:.35rem .7rem}table{border-collapse:collapse;width:100%}td{border-bottom:1px solid #ddd;padding:.25rem .4rem}
+.execute{color:#11713b}.needs_approval{color:#9a6200}.reject{color:#b3261e}.duplicate{color:#555}code{font-size:12px}</style></head>
+<body>
+<h1>Web operations console <small>(synthetic demo)</small></h1>
+<p>AI agents propose site changes; deterministic checks decide. Large ad budgets wait for a human, agents may only save CMS drafts,
+and analytics events are checked for consent and personal data before they are accepted.</p>
+<label><input type="checkbox" id="consent" checked> analytics consent</label>
+<h2>1. Agent proposals</h2>
+<button data-sample="0">SEO: update meta</button><button data-sample="1">Growth: budget 2,500/day</button>
+<button data-sample="2">Growth: budget 25,000/day</button><button data-sample="3">Content: publish directly</button>
+<p id="last"></p>
+<h2>2. Waiting for human approval</h2><ul id="pending"></ul>
+<h2>3. Audit log <small id="chain"></small></h2>
+<table><thead><tr><td>#</td><td>tool</td><td>decision</td><td>errors</td><td>hash</td></tr></thead><tbody id="audit"></tbody></table>
+<h2>4. Tracking guard</h2>
+<button id="pii">Send a form_submit event that contains an e-mail address</button> <span id="track-log"></span>
+<script type="module" src="/app.js"></script>
+</body></html>
