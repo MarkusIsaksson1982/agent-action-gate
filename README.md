@@ -1,5 +1,7 @@
 # agent-action-gate
 
+[![CI](https://github.com/MarkusIsaksson1982/agent-action-gate/actions/workflows/ci.yml/badge.svg)](https://github.com/MarkusIsaksson1982/agent-action-gate/actions/workflows/ci.yml)
+
 A small, dependency-free **strict TypeScript** gate between an LLM agent and a backend that acts on its behalf –
 with a fullstack web-operations demo (node:http API + TypeScript frontend) on top.
 The agent proposes an action (tool + JSON args + rationale + idempotency key); the gate decides:
