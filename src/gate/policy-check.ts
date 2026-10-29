@@ -1,3 +1,6 @@
+import { canonicalJson } from './canonical-json.js';
+
+// Approval gate: policy check before tool call, tool permission rules per tool and agent role.
 // approvalGate: the policy check before a tool call. Each rule matches a tool name (exact or glob like "db.*"),
 // optionally an agent role and conditions on the tool arguments, and has an effect: allow, deny or require_approval.
 // All matching rules are collected; the most restrictive effect wins (deny > require_approval > allow).
@@ -58,6 +61,10 @@ export interface PolicyDecision {
 const RANK: Record<Effect, number> = { allow: 0, require_approval: 1, deny: 2 };
 const EFFECTS = new Set<Effect>(['allow', 'deny', 'require_approval']);
 const COND_KEYS = new Set(['eq', 'ne', 'in', 'notIn', 'gt', 'gte', 'lt', 'lte', 'matches', 'exists']);
+const RULE_KEYS = new Set(['id', 'tool', 'effect', 'reason', 'roles', 'when', 'approvers', 'approvalTtlSec']);
+const POLICY_KEYS = new Set(['version', 'name', 'defaultEffect', 'approvalTtlSec', 'rules', 'description']);
+/** upper bound for approval expiry: 30 days */
+export const MAX_APPROVAL_TTL_SEC = 30 * 24 * 3600;
 
 export class PolicyError extends Error {}
 
@@ -75,7 +82,9 @@ export function getArg(args: Record<string, unknown>, path: string): { present: 
   return { present: cur !== undefined, value: cur };
 }
 
-const deepEq = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+const canon = (v: unknown): string | undefined => { try { return canonicalJson(v); } catch { return undefined; } };
+/** structural equality that ignores object key order */
+const deepEq = (a: unknown, b: unknown): boolean => { const x = canon(a); return x !== undefined && x === canon(b); };
 
 export function conditionHolds(c: ArgCondition, present: boolean, v: unknown): boolean {
   if (c.exists !== undefined && c.exists !== present) return false;
@@ -110,13 +119,16 @@ export function loadPolicy(raw: unknown): ToolPolicy {
   const p = raw as Record<string, unknown>;
   if (p.version !== 1) fail('policy.version must be 1');
   if (p.defaultEffect !== undefined && !EFFECTS.has(p.defaultEffect as Effect)) fail('policy.defaultEffect is invalid');
-  const ttlOk = (v: unknown) => v === undefined || (typeof v === 'number' && Number.isFinite(v) && v > 0);
+  for (const k of Object.keys(p)) if (!POLICY_KEYS.has(k)) fail(`unknown policy field "${k}"`);
+  const ttlOk = (v: unknown) => v === undefined || (typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= MAX_APPROVAL_TTL_SEC);
   if (!ttlOk(p.approvalTtlSec)) fail('policy.approvalTtlSec must be a positive number of seconds');
   if (!Array.isArray(p.rules)) fail('policy.rules must be an array');
   const ids = new Set<string>();
   (p.rules as unknown[]).forEach((r, i) => {
     if (r === null || typeof r !== 'object') fail(`rules[${i}] must be an object`);
     const rule = r as Record<string, unknown>;
+    // a typo like "approver" must not silently drop a restriction
+    for (const k of Object.keys(rule)) if (!RULE_KEYS.has(k)) fail(`rules[${i}]: unknown field "${k}"`);
     if (typeof rule.id !== 'string' || rule.id === '') fail(`rules[${i}].id must be a non-empty string`);
     if (ids.has(rule.id as string)) fail(`duplicate rule id "${String(rule.id)}"`);
     ids.add(rule.id as string);
@@ -130,7 +142,12 @@ export function loadPolicy(raw: unknown): ToolPolicy {
       if (rule.when === null || typeof rule.when !== 'object') fail(`rules[${i}].when must be an object`);
       for (const [path, cond] of Object.entries(rule.when as object)) {
         if (cond === null || typeof cond !== 'object') fail(`rules[${i}].when.${path} must be an object`);
-        for (const k of Object.keys(cond as object)) if (!COND_KEYS.has(k)) fail(`rules[${i}].when.${path}: unknown operator "${k}"`);
+        const c = cond as Record<string, unknown>;
+        for (const k of Object.keys(c)) if (!COND_KEYS.has(k)) fail(`rules[${i}].when.${path}: unknown operator "${k}"`);
+        for (const k of ['in', 'notIn']) if (k in c && !Array.isArray(c[k])) fail(`rules[${i}].when.${path}.${k} must be an array`);
+        for (const k of ['gt', 'gte', 'lt', 'lte']) if (k in c && !(typeof c[k] === 'number' && Number.isFinite(c[k]))) fail(`rules[${i}].when.${path}.${k} must be a number`);
+        if ('matches' in c && typeof c.matches !== 'string') fail(`rules[${i}].when.${path}.matches must be a string`);
+        if ('exists' in c && typeof c.exists !== 'boolean') fail(`rules[${i}].when.${path}.exists must be a boolean`);
         const m = (cond as ArgCondition).matches;
         if (m !== undefined) { try { new RegExp(m); } catch { fail(`rules[${i}].when.${path}.matches is not a valid regex`); } }
       }

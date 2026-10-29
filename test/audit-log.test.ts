@@ -88,3 +88,15 @@ test('hash chain verify: duplicate seq numbers are a gap', () => {
   const lines = fx('valid.jsonl').trim().split('\n').map((l) => JSON.parse(l));
   assert.equal(verifyHashChain([lines[0], lines[1], lines[1]]).issues[0]!.code, 'seq_gap');
 });
+
+test('audit log: append copies data, returned entry cannot corrupt history', () => {
+  const a = new AuditLog(); const data = { args: { amount: 1 } };
+  const e = a.append('decision', data);
+  data.args.amount = 2; (e.data as typeof data).args.amount = 3;
+  assert.deepEqual(a.all()[0]!.data, { args: { amount: 1 } }); assert.equal(a.verify().ok, true);
+});
+
+test('hash chain verify never throws: 1e999 in a line is reported, not thrown', () => {
+  const line = fx('valid.jsonl').split('\n')[0]!.replace('"data":{', '"data":{"x":1e999,');
+  assert.deepEqual(codes(verifyHashChain(line + '\n')), ['1:hash_mismatch']);
+});

@@ -42,3 +42,9 @@ test('cli: malformed --count/--head and invalid call shape are usage errors (exi
   assert.equal(run('verify', F + 'audit-logs/valid.jsonl', '--head').code, 2);
   assert.equal(run('check', F + 'policies/payments-refund.policy.json', F + 'policies/email-send.policy.json').code, 2);
 });
+
+test('cli: --head=<hash> form, array args rejected', () => {
+  const head = readFileSync(F + 'audit-logs/valid.head.txt', 'utf8').trim();
+  assert.equal(run('verify', F + 'audit-logs/tampered-truncated.jsonl', '--head=' + head).code, 1);
+  assert.equal(run('verify', F + 'audit-logs/valid.jsonl', '--head=' + head).code, 0);
+});

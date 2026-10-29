@@ -17,6 +17,7 @@ node dist/src/cli.js verify fixtures/audit-logs/tampered-deleted-entry.jsonl   #
 ```
 
 ```ts
+import { readFileSync } from 'node:fs';
 import { ToolInvocationGuard, AuditLog, loadPolicy } from 'agent-action-gate';
 
 const policy = loadPolicy(JSON.parse(readFileSync('fixtures/policies/payments-refund.policy.json', 'utf8')));
@@ -67,15 +68,18 @@ src/action-gate.ts, src/server.ts v0.2 schema-validating gate + web-operations d
 ```
 
 ## Test queries (Xerj)
-These five queries should land on the files named in [XERJ-QUERIES.md](XERJ-QUERIES.md):
-1. `approval gate policy check before tool call allow deny require_approval`
-2. `human in the loop approval request expiry for agent tool calls`
-3. `idempotency key dedupe repeated agent tool calls`
-4. `hash chain verify tampered audit log jsonl`
-5. `tool invocation guard wrap agent tool function decision log`
+Pre-registered queries; the expected file should rank in the top 5:
+
+| query | expected file |
+|---|---|
+| approval gate policy check before tool call | docs/approval-gate.md, src/gate/policy-check.ts |
+| human in the loop approval request expiry | docs/human-in-the-loop-approval-queue.md, src/gate/approval-queue.ts |
+| idempotency key dedupe repeated tool calls | docs/idempotency-key.md, src/gate/idempotency-key.ts |
+| hash chain verify tampered audit log | docs/audit-log-hash-chain-verify.md, src/gate/audit-log.ts |
+| tool invocation guard for agent tool calls | docs/tool-invocation-guard.md, src/gate/tool-invocation-guard.ts |
 
 ## Limits
-- In-memory queue and idempotency store (single process). For several workers, implement the same interface on Redis/Postgres.
+- In-memory queue and idempotency store (single process); one audit-log writer per file. For several workers, implement the same interface on Redis/Postgres.
 - A hash chain is tamper-*evident*, not tamper-proof: anchor the head hash outside the agent's reach (see the audit-log doc).
 - No MCP server adapter yet; wrap your MCP tool handlers with `guard.wrap()`.
 
@@ -98,7 +102,7 @@ a human signs off and above 10,000/day it is rejected; content agents may only s
 Request bodies are capped at 64 KB (413). Everything is in memory.
 
 - `src/server.ts` – API + static frontend · `src/tracking.ts` – tracking guard + vitals rating · `web/app.ts`, `web/index.html` – frontend
-- `test/server.test.ts`, `test/tracking.test.ts` – end-to-end API test on a random port + tracking/vitals tests (10 node:test tests in total)
+- `test/server.test.ts`, `test/tracking.test.ts` – end-to-end API test on a random port + tracking/vitals tests (node:test)
 
 - `src/action-gate.ts` – the gate (validateProposal, decide, appendEvent, verifyLog, handler, evaluate)
 - `test/action-gate.test.ts` – 6 node:test tests for the gate (`tsc --strict`)

@@ -31,7 +31,8 @@ store `audit.headHash` somewhere the agent cannot write (a separate DB, a signed
 
 ## Single writer
 One `AuditLog` instance per file. Before each append it checks the file size it last wrote; if another process appended in between,
-`append()` throws (`changed on disk`) instead of forking the hash chain. Several workers should send entries to one writer.
+`append()` throws (`changed on disk`) instead of forking the hash chain. This is best-effort detection, not a lock: two processes racing
+in the same millisecond can still fork the chain, which `verify` then reports. Several workers should send entries to one writer process.
 
 ## CLI
 ```bash

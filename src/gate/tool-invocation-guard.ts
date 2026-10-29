@@ -25,6 +25,10 @@ export interface GuardOptions {
   queue?: PendingApprovalQueue;
   idempotency?: IdempotencyStore<unknown>;
   now?: () => number;
+  /** When the tool throws: true (default) releases the idempotency key so the agent may retry; false keeps it
+   *  claimed (retries get `in_flight`) until an operator calls `idempotency.release(key)`, for tools where a
+   *  timeout may hide a side effect that already happened (payments, emails). */
+  releaseKeyOnError?: boolean;
 }
 
 export interface InvokeOptions { idempotencyKey?: string }
@@ -32,15 +36,16 @@ export interface InvokeOptions { idempotencyKey?: string }
 export type ToolFn<A extends Record<string, unknown>, R> = (args: A) => R | Promise<R>;
 
 export class ToolInvocationGuard {
+  private readonly releaseKeyOnError: boolean;
   readonly policy: ToolPolicy; readonly audit: AuditLog; readonly queue: PendingApprovalQueue; readonly idempotency: IdempotencyStore<unknown>;
 
   constructor(o: GuardOptions) {
-    this.policy = o.policy;
+    this.policy = o.policy; this.releaseKeyOnError = o.releaseKeyOnError ?? true;
     this.audit = o.audit ?? new AuditLog(o.now ? { now: () => new Date(o.now!()) } : {});
     const ttl = o.policy.approvalTtlSec;
     this.queue = o.queue ?? new PendingApprovalQueue({ ...(ttl !== undefined ? { defaultTtlSec: ttl } : {}), ...(o.now ? { now: o.now } : {}) });
     // approval lifecycle events always go to the audit log, also for an injected queue
-    this.queue.subscribe((e) => this.audit.append(e.type, { id: e.request.id, tool: e.request.tool, status: e.request.status, idempotencyKey: e.request.idempotencyKey,
+    this.queue.subscribe((e) => this.audit.append(e.type, { id: e.request.id, tool: e.request.tool, status: e.request.status, idempotencyKey: e.request.idempotencyKey, requestedBy: e.request.requestedBy,
         ...(e.request.decidedBy ? { decidedBy: e.request.decidedBy } : {}), expiresAt: new Date(e.request.expiresAt).toISOString() }));
     this.idempotency = o.idempotency ?? new IdempotencyStore(undefined, o.now);
   }
@@ -53,10 +58,12 @@ export class ToolInvocationGuard {
 
   /** Guard one tool call. `fn` only runs when policy (and, if required, a human) allows it, and at most once per key. */
   async invoke<A extends Record<string, unknown>, R>(call: ToolCall & { args: A }, fn: ToolFn<A, R>, opts: InvokeOptions = {}): Promise<GuardResult<R>> {
-    const key = opts.idempotencyKey ?? idempotencyKey(call.tool, call.args, call.agent);
-    const argsHash = sha256Hex(canonicalJson(call.args));
-    const fingerprint = call.tool + ':' + argsHash;
     const d = approvalGate(this.policy, call);
+    let argsHash: string; let key: string;
+    try { argsHash = sha256Hex(canonicalJson(call.args)); key = opts.idempotencyKey ?? idempotencyKey(call.tool, call.args, call.agent); }
+    catch (err) { return { status: 'denied', decision: this.log(call, opts.idempotencyKey ?? '', '', d, 'denied', { reasons: [`tool arguments must be plain JSON: ${String(err)}`] }) }; }
+    // the key is bound to agent + tool + arguments: another agent cannot replay or hijack it
+    const fingerprint = call.agent + '|' + call.tool + '|' + argsHash;
 
     if (d.effect === 'deny') return { status: 'denied', decision: this.log(call, key, argsHash, d, 'denied') };
 
@@ -74,10 +81,10 @@ export class ToolInvocationGuard {
     if (d.effect === 'require_approval') {
       const existing = this.queue.findByIdempotencyKey(key);
       if (existing && existing.status !== 'expired' && existing.status !== 'consumed'
-          && (existing.tool !== call.tool || canonicalJson(existing.args) !== canonicalJson(call.args))) {
+          && (existing.tool !== call.tool || existing.requestedBy !== call.agent || canonicalJson(existing.args) !== canonicalJson(call.args))) {
         // an approval covers exactly the tool + arguments a human saw; reusing its key for another payload is refused
         return { status: 'denied', decision: this.log(call, key, argsHash, d, 'denied', { approvalRequestId: existing.id,
-          reasons: [`idempotency key ${key} belongs to approval request ${existing.id} for different tool arguments`] }) };
+          reasons: [`idempotency key ${key} belongs to approval request ${existing.id} for a different agent or different tool arguments`] }) };
       }
       if (existing?.status === 'approved') {
         approvalRequestId = existing.id; approvedBy = existing.decidedBy;
@@ -104,7 +111,7 @@ export class ToolInvocationGuard {
       this.idempotency.complete(key, result);
       return { status: 'executed', result, decision: this.log(call, key, argsHash, d, 'executed', extra) };
     } catch (err) {
-      this.idempotency.release(key);
+      if (this.releaseKeyOnError) this.idempotency.release(key);
       const msg = err instanceof Error ? err.message : String(err);
       return { status: 'failed', error: msg, decision: this.log(call, key, argsHash, d, 'failed', { ...extra, error: msg }) };
     }

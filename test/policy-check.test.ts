@@ -98,3 +98,16 @@ test('loadPolicy: approval expiry TTLs must be positive, roles/approvers string 
   assert.throws(() => loadPolicy({ version: 1, rules: [{ id: 'a', tool: 't', effect: 'allow', reason: 'r', roles: 'admin' }] }), /roles/);
   assert.throws(() => loadPolicy({ version: 1, rules: [{ id: 'a', tool: 't', effect: 'require_approval', reason: 'r', approvers: [1] }] }), /approvers/);
 });
+
+test('loadPolicy: operand types, unknown fields (typos), max approval TTL', () => {
+  assert.throws(() => loadPolicy({ version: 1, rules: [{ id: 'a', tool: 't', effect: 'allow', reason: 'r', when: { x: { in: 'abc' } } }] }), /must be an array/);
+  assert.throws(() => loadPolicy({ version: 1, rules: [{ id: 'a', tool: 't', effect: 'allow', reason: 'r', when: { x: { gt: '5' } } }] }), /must be a number/);
+  assert.throws(() => loadPolicy({ version: 1, rules: [{ id: 'a', tool: 't', effect: 'require_approval', reason: 'r', approver: ['cfo'] }] }), /unknown field "approver"/);
+  assert.throws(() => loadPolicy({ version: 1, rules: [], defaultEfect: 'allow' }), /unknown policy field/);
+  assert.throws(() => loadPolicy({ version: 1, approvalTtlSec: 1e300, rules: [] }), /approvalTtlSec/);
+});
+
+test('conditions: eq / in ignore object key order', () => {
+  assert.equal(conditionHolds({ eq: { a: 1, b: 2 } }, true, { b: 2, a: 1 }), true);
+  assert.equal(conditionHolds({ notIn: [{ a: 1, b: 2 }] }, true, { b: 2, a: 1 }), false);
+});

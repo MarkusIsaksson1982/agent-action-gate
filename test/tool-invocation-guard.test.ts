@@ -127,3 +127,32 @@ test('injected PendingApprovalQueue events are still written to the audit log', 
   await guard.invoke({ tool: 'payments.refund', agent: 'a', role: 'support_agent', args: { amount: 900 } }, () => 1);
   assert.deepEqual(guard.audit.all().map((e) => e.type), ['approval.requested', 'decision']);
 });
+
+test('idempotency key is bound to the agent: another agent cannot replay or consume it', async () => {
+  const { guard, refund, calls } = setup();
+  const a = { orderId: 'o8', amount: 100, currency: 'SEK' };
+  await refund(a, { ...ctx, idempotencyKey: 'shared' });
+  const other = await refund(a, { agent: 'support-bot-2', role: 'support_agent', idempotencyKey: 'shared' });
+  assert.equal(other.status, 'denied'); assert.equal(calls(), 1);
+  const big = { orderId: 'o9', amount: 900, currency: 'SEK' };
+  const p = await refund(big, { ...ctx, idempotencyKey: 'shared-2' });
+  guard.queue.approve(p.status === 'pending_approval' ? p.approvalRequestId : '', 'cfo');
+  const hijack = await refund(big, { agent: 'support-bot-2', role: 'support_agent', idempotencyKey: 'shared-2' });
+  assert.equal(hijack.status, 'denied'); assert.match(hijack.decision.reasons[0]!, /different agent/); assert.equal(calls(), 1);
+});
+
+test('releaseKeyOnError=false: a failed payment keeps its key claimed (no blind retry)', async () => {
+  const guard = new ToolInvocationGuard({ policy, releaseKeyOnError: false }); let n = 0;
+  const pay = guard.wrap('payments.get_charge', () => { n++; throw new Error('gateway timeout'); });
+  assert.equal((await pay({ id: 1 }, ctx)).status, 'failed');
+  assert.equal((await pay({ id: 1 }, ctx)).status, 'in_flight'); assert.equal(n, 1);
+});
+
+test('non-JSON tool arguments are denied, not thrown; duplicate results are copies', async () => {
+  const { guard } = setup();
+  const t = guard.wrap('payments.get_x', () => ({ n: 1 }));
+  assert.equal((await t({ bad: NaN }, ctx)).status, 'denied');
+  const r1 = await t({ q: 1 }, ctx); if (r1.status === 'executed') r1.result.n = 999;
+  const r2 = await t({ q: 1 }, ctx);
+  assert.deepEqual(r2.status === 'duplicate' && r2.result, { n: 1 });
+});

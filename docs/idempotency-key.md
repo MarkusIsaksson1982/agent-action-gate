@@ -9,7 +9,7 @@ idempotencyKey('email.send', { to: 'a@x', body: 'hi' }, 'agent-1'); // 'idk_…'
 const store = new IdempotencyStore(24 * 3600_000);
 store.begin(key, fingerprint);   // { state: 'new' } -> you own the key, run the tool
 store.complete(key, result);     // later begin()/peek() -> { state: 'completed', result }
-store.release(key);              // tool failed: allow a retry
+store.release(key);              // tool failed and is safe to retry
 ```
 
 - Key source: pass the model's `tool_call` id (or your own Idempotency-Key header) as `idempotencyKey`; otherwise the guard derives one from
@@ -18,4 +18,8 @@ store.release(key);              // tool failed: allow a retry
 - **In flight**: a concurrent duplicate gets `in_flight` instead of a second execution.
 - **Conflict**: the same key with *different* arguments is refused (`IdempotencyConflictError`), like Stripe's Idempotency-Key semantics.
 - **TTL**: entries expire after `ttlMs` (default 24 h).
-- Failed calls release the key so the agent can retry safely.
+- Failed calls release the key by default so the agent can retry. Careful: a timeout may hide a side effect that already
+  happened. For payments or emails construct the guard with `releaseKeyOnError: false`; the key then stays claimed (retries get
+  `in_flight`) until an operator reconciles and calls `guard.idempotency.release(key)`.
+- The key is bound to agent + tool + arguments: another agent re-using the same key is refused, it never receives the first agent's result.
+- In-flight keys never expire by TTL; completed results expire `ttlMs` after completion. Replayed results are copies.

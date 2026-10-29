@@ -69,3 +69,12 @@ test('approved but unused approval expires; expireStale sweeps it', () => {
   assert.deepEqual(q.expireStale().map((x) => x.id), [r.id]);
   assert.throws(() => q.consume(r.id), code('not_pending'));
 });
+
+test('one open approval request per idempotency key; huge TTL rejected', () => {
+  const { q } = setup();
+  const r = q.request(req);
+  assert.throws(() => q.request(req), code('duplicate_request'));
+  q.deny(r.id, 'cfo');
+  assert.equal(q.request(req).status, 'pending', 'after a decision a new request may be opened');
+  assert.throws(() => q.request({ ...req, idempotencyKey: 'k9', ttlSec: 1e308 }), RangeError);
+});

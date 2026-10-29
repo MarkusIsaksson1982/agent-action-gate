@@ -29,3 +29,9 @@ test('idempotency store: release lets a failed call retry', () => {
   s.begin('k', 'f'); s.release('k');
   assert.deepEqual(s.begin('k', 'f'), { state: 'new' }); assert.equal(s.size, 1);
 });
+
+test('idempotency store: an in-flight key never expires by TTL', () => {
+  let now = 0; const s = new IdempotencyStore(10, () => now);
+  s.begin('k', 'f'); now = 1000;
+  assert.equal(s.begin('k', 'f').state, 'in_flight');
+});

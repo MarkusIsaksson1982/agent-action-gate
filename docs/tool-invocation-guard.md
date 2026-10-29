@@ -19,7 +19,9 @@ switch (r.status) { case 'executed': case 'duplicate': /* r.result */ case 'pend
 3. **Approval** (`require_approval` only) – no request yet → create one → `pending_approval`; pending → `pending_approval` (same id);
    denied by a human → `denied`; expired → log `approval_expired` and create a fresh request; approved → consume and run. A pending/approved request whose tool or arguments differ from this call → `denied` (approval is bound to the payload).
 4. **Execute** – result stored under the key; a thrown error → `failed` and the key is released for a retry.
-5. **Decision log** – one `decision` entry per invocation in the hash-chained audit log.
+5. **Arguments** must be plain JSON (no `NaN`, functions, BigInt); anything else is `denied` instead of thrown.
+6. **Decision log** – one `decision` entry per invocation in the hash-chained audit log.
 
 The agent re-sends the same tool call (same idempotency key) after a human approves; that is how the approval reaches the call.
-Policy is re-evaluated on every attempt, so tightening a rule also blocks already-approved calls.
+Policy is re-evaluated on every attempt, so changing a rule to `deny` also blocks already-approved calls. (Changes to `approvers` or
+`approvalTtlSec` only apply to new approval requests.)

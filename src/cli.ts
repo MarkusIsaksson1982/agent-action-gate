@@ -9,7 +9,10 @@ import { verifyHashChain, loadPolicy, approvalGate, PolicyError, type ToolCall }
 
 export interface CliIo { out: (s: string) => void; err: (s: string) => void }
 
-function flag(args: string[], name: string): string | undefined { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; }
+function flag(args: string[], name: string): string | undefined {
+  const eq = args.find((a) => a.startsWith(name + '=')); if (eq) return eq.slice(name.length + 1);
+  const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined;
+}
 
 export function runCli(argv: string[], io: CliIo = { out: (s) => process.stdout.write(s + '\n'), err: (s) => process.stderr.write(s + '\n') }): number {
   const [cmd, ...rest] = argv; const json = rest.includes('--json');
@@ -17,7 +20,7 @@ export function runCli(argv: string[], io: CliIo = { out: (s) => process.stdout.
   try {
     if (cmd === 'verify' && pos[0]) {
       const head = flag(rest, '--head'); const count = flag(rest, '--count');
-      if ((rest.includes('--head') && !/^[0-9a-f]{64}$/.test(head ?? '')) || (rest.includes('--count') && !/^[0-9]+$/.test(count ?? ''))) {
+      if ((head !== undefined || rest.includes('--head')) && !/^[0-9a-f]{64}$/.test(head ?? '') || (count !== undefined || rest.includes('--count')) && !/^[0-9]+$/.test(count ?? '')) {
         io.err('--head needs a 64-char hex hash and --count a non-negative integer'); return 2;
       }
       const r = verifyHashChain(readFileSync(pos[0], 'utf8'), { ...(head ? { expectedHead: head } : {}), ...(count ? { expectedCount: Number(count) } : {}) });
@@ -29,7 +32,7 @@ export function runCli(argv: string[], io: CliIo = { out: (s) => process.stdout.
     if (cmd === 'check' && pos[0] && pos[1]) {
       const policy = loadPolicy(JSON.parse(readFileSync(pos[0], 'utf8')));
       const call = JSON.parse(readFileSync(pos[1], 'utf8')) as ToolCall;
-      if (!call || typeof call.tool !== 'string' || typeof call.agent !== 'string' || !call.args || typeof call.args !== 'object') {
+      if (!call || typeof call.tool !== 'string' || typeof call.agent !== 'string' || (call.role !== undefined && typeof call.role !== 'string') || !call.args || typeof call.args !== 'object' || Array.isArray(call.args)) {
         io.err('call.json must be {"tool": string, "agent": string, "role"?: string, "args": object}'); return 2;
       }
       const d = approvalGate(policy, call);

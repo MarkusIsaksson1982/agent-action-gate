@@ -1,6 +1,9 @@
-// Pending approval queue (human in the loop). A require_approval decision creates an ApprovalRequest with an
+// Pending approval queue (human in the loop): approval request, approval expiry, approve / deny by a human.
+// A require_approval decision creates an ApprovalRequest with an
 // approval expiry. A human approves or denies it; agents cannot approve their own requests; expired requests can
 // no longer be approved. Every transition is reported through an optional onEvent hook (wired to the audit log).
+
+const MAX_TTL = 30 * 24 * 3600;
 
 export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'consumed';
 
@@ -21,7 +24,7 @@ export interface ApprovalRequest {
 }
 
 export class ApprovalError extends Error {
-  constructor(public readonly code: 'not_found' | 'not_pending' | 'expired' | 'self_approval' | 'not_an_approver', message: string) { super(message); }
+  constructor(public readonly code: 'not_found' | 'not_pending' | 'expired' | 'self_approval' | 'not_an_approver' | 'duplicate_request', message: string) { super(message); }
 }
 
 export type ApprovalEvent = { type: 'approval.requested' | 'approval.approved' | 'approval.denied' | 'approval.expired' | 'approval.consumed'; request: ApprovalRequest };
@@ -37,7 +40,7 @@ export class PendingApprovalQueue {
 
   constructor(o: QueueOptions = {}) {
     this.ttl = o.defaultTtlSec ?? 900; this.now = o.now ?? Date.now; if (o.onEvent) this.listeners.push(o.onEvent);
-    if (!(Number.isFinite(this.ttl) && this.ttl > 0)) throw new RangeError('defaultTtlSec must be a positive number');
+    if (!(Number.isFinite(this.ttl) && this.ttl > 0 && this.ttl <= MAX_TTL)) throw new RangeError('defaultTtlSec must be a positive number of seconds (max 30 days)');
     this.newId = o.newId ?? (() => `apr_${(++this.counter).toString().padStart(6, '0')}`);
   }
 
@@ -55,7 +58,10 @@ export class PendingApprovalQueue {
 
   request(input: { tool: string; args: Record<string, unknown>; idempotencyKey: string; requestedBy: string; reasons: string[]; approvers?: string[]; ttlSec?: number }): ApprovalRequest {
     const ttl = input.ttlSec ?? this.ttl;
-    if (!(Number.isFinite(ttl) && ttl > 0)) throw new RangeError('ttlSec must be a positive number');
+    if (!(Number.isFinite(ttl) && ttl > 0 && ttl <= MAX_TTL)) throw new RangeError('ttlSec must be a positive number of seconds (max 30 days)');
+    const prev = this.byKey.get(input.idempotencyKey);
+    if (prev) { const s = this.refresh(this.requests.get(prev)!); if (s === 'pending' || s === 'approved')
+      throw new ApprovalError('duplicate_request', `idempotency key ${input.idempotencyKey} already has an open approval request ${prev}`); }
     const t = this.now();
     const r: ApprovalRequest = { id: this.newId(), tool: input.tool, args: structuredClone(input.args), idempotencyKey: input.idempotencyKey,
       requestedBy: input.requestedBy, reasons: [...input.reasons], createdAt: t, expiresAt: t + ttl * 1000, status: 'pending' };

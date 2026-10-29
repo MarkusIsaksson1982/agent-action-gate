@@ -1,3 +1,4 @@
+// Audit log: append-only (immutable once written), hash chain verify, tampered log detection.
 // Append-only, hash-chained audit log stored as JSONL (one JSON object per line).
 // Each entry carries seq, ts, type, data, prevHash and hash = sha256(canonicalJson({seq, ts, type, data, prevHash})).
 // verifyHashChain() re-computes every hash and reports tampered entries, sequence gaps, reordering, broken links,
@@ -46,7 +47,9 @@ export function verifyHashChain(input: string | AuditEntry[], opts: VerifyOption
     count++;
     if (raw.seq !== expectedSeq) issues.push({ line, seq: raw.seq, code: 'seq_gap', message: `expected seq ${expectedSeq}, found ${raw.seq}` });
     if (raw.prevHash !== prevHash) issues.push({ line, seq: raw.seq, code: 'prev_hash_mismatch', message: 'prevHash does not link to the previous entry' });
-    if (hashAuditEntry(raw) !== raw.hash) issues.push({ line, seq: raw.seq, code: 'hash_mismatch', message: 'entry content was modified after it was written' });
+    let computed: string | undefined;
+    try { computed = hashAuditEntry(raw); } catch { computed = undefined; }
+    if (computed !== raw.hash) issues.push({ line, seq: raw.seq, code: 'hash_mismatch', message: 'entry content was modified after it was written' });
     prevHash = raw.hash; expectedSeq = raw.seq + 1; lastSeq = raw.seq;
   }
   if (opts.expectedHead !== undefined && opts.expectedHead !== prevHash)
@@ -59,8 +62,9 @@ export function verifyHashChain(input: string | AuditEntry[], opts: VerifyOption
 export interface AuditLogOptions { path?: string; now?: () => Date }
 
 /** Append-only audit log. With `path`, every append is written synchronously to a JSONL file (O_APPEND).
- *  Single writer: one AuditLog instance per file. If another writer appended in between, append() throws instead of
- *  forking the hash chain. */
+ *  Single writer: one AuditLog instance per file. append() checks the file size first and throws if another writer
+ *  appended in between. That is best-effort detection, not a lock: two processes racing can still fork the chain
+ *  (verify will then report it). Use one writer process, or an OS file lock, for several workers. */
 export class AuditLog {
   private entries: AuditEntry[] = [];
   private head = GENESIS_HASH;
@@ -80,7 +84,9 @@ export class AuditLog {
   }
 
   append<D>(type: string, data: D): AuditEntry<D> {
-    const base = { seq: this.entries.length, ts: this.now().toISOString(), type, data, prevHash: this.head };
+    // store a JSON round-tripped copy: the caller cannot mutate history, and what we hash is exactly what is written
+    const stored = JSON.parse(canonicalJson(data)) as D;
+    const base = { seq: this.entries.length, ts: this.now().toISOString(), type, data: stored, prevHash: this.head };
     const entry: AuditEntry<D> = { ...base, hash: hashAuditEntry(base) };
     if (this.path) {
       const size = existsSync(this.path) ? statSync(this.path).size : 0;
@@ -90,7 +96,7 @@ export class AuditLog {
       this.bytes += Buffer.byteLength(line, 'utf8');
     }
     this.entries.push(entry); this.head = entry.hash;
-    return entry;
+    return structuredClone(entry);
   }
 
   /** Read-only snapshot (copies, so callers cannot mutate history). */

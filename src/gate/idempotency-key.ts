@@ -1,4 +1,5 @@
-// Idempotency keys for agent tool calls. An LLM agent that retries (timeouts, re-planning, duplicated tool_call
+// Idempotency key: dedupe repeated tool calls from an agent.
+// An LLM agent that retries (timeouts, re-planning, duplicated tool_call
 // messages) must not send the same refund or email twice. The key is either supplied by the agent or derived from
 // sha256(canonicalJson({tool, args, agent})); the store remembers the first outcome and replays it for repeats.
 import { canonicalJson, sha256Hex } from './canonical-json.js';
@@ -11,6 +12,9 @@ export type IdempotencyState<T> =
   | { state: 'new' }
   | { state: 'in_flight'; startedAt: number }
   | { state: 'completed'; result: T; completedAt: number };
+
+/** Stored and replayed results are copies, so mutating one replay cannot change the next. */
+function copy<T>(v: T): T { try { return structuredClone(v); } catch { return v; } }
 
 interface Entry<T> { fingerprint: string; startedAt: number; done: boolean; result?: T; completedAt?: number }
 
@@ -25,7 +29,8 @@ export class IdempotencyStore<T = unknown> {
 
   private live(key: string): Entry<T> | undefined {
     const e = this.entries.get(key);
-    if (e && this.now() - e.startedAt > this.ttlMs) { this.entries.delete(key); return undefined; }
+    // only completed entries expire; an in-flight call keeps its key however long it runs
+    if (e && e.done && this.now() - e.completedAt! > this.ttlMs) { this.entries.delete(key); return undefined; }
     return e;
   }
 
@@ -34,7 +39,7 @@ export class IdempotencyStore<T = unknown> {
     const e = this.live(key);
     if (!e) { this.entries.set(key, { fingerprint, startedAt: this.now(), done: false }); return { state: 'new' }; }
     if (e.fingerprint !== fingerprint) throw new IdempotencyConflictError(key);
-    return e.done ? { state: 'completed', result: e.result as T, completedAt: e.completedAt! } : { state: 'in_flight', startedAt: e.startedAt };
+    return e.done ? { state: 'completed', result: copy(e.result as T), completedAt: e.completedAt! } : { state: 'in_flight', startedAt: e.startedAt };
   }
 
   /** Look without claiming (used by the guard before the approval step). */
@@ -42,13 +47,13 @@ export class IdempotencyStore<T = unknown> {
     const e = this.live(key);
     if (!e) return { state: 'new' };
     if (fingerprint !== undefined && e.fingerprint !== fingerprint) throw new IdempotencyConflictError(key);
-    return e.done ? { state: 'completed', result: e.result as T, completedAt: e.completedAt! } : { state: 'in_flight', startedAt: e.startedAt };
+    return e.done ? { state: 'completed', result: copy(e.result as T), completedAt: e.completedAt! } : { state: 'in_flight', startedAt: e.startedAt };
   }
 
   complete(key: string, result: T): void {
     const e = this.entries.get(key);
     if (!e) throw new Error(`complete(): unknown idempotency key ${key}`);
-    e.done = true; e.result = result; e.completedAt = this.now();
+    e.done = true; e.result = copy(result); e.completedAt = this.now();
   }
 
   /** Release a key whose call failed, so a retry may run again. */
