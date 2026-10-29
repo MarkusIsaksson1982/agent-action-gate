@@ -1,17 +1,55 @@
 {
  "name": "agent-action-gate",
- "version": "0.2.0",
+ "version": "0.3.0",
  "type": "module",
  "private": true,
  "license": "MIT",
  "scripts": {
   "build": "tsc -p .",
-  "test": "tsc -p . && node --test dist/test/",
+  "test": "tsc -p . && node --test dist/test/*.test.js",
   "demo": "tsc -p . && node dist/src/demo.js",
-  "start": "tsc -p . && node dist/src/server.js"
+  "start": "tsc -p . && node dist/src/server.js",
+  "fixtures": "tsc -p . && node dist/scripts/generate-audit-fixtures.js",
+  "verify": "tsc -p . && node dist/src/cli.js verify",
+  "example": "tsc -p . && node dist/examples/agent-tool-calling.js",
+  "prepare": "tsc -p ."
  },
  "devDependencies": {
   "typescript": "^5.9.3",
   "@types/node": "^20.19.43"
+ },
+ "description": "Approval gate for LLM agent tool calls: policy check before call (allow/deny/require_approval), human-in-the-loop approval queue with approval expiry, idempotency keys, and an append-only hash-chained audit log with a verify CLI.",
+ "main": "dist/src/gate/index.js",
+ "types": "dist/src/gate/index.d.ts",
+ "bin": {
+  "agent-action-gate": "dist/src/cli.js"
+ },
+ "keywords": [
+  "approval-gate",
+  "human-in-the-loop",
+  "audit-log",
+  "hash-chain",
+  "idempotency-key",
+  "tool-calling",
+  "agent-tool",
+  "llm-agent",
+  "policy",
+  "decision-log"
+ ],
+ "repository": {
+  "type": "git",
+  "url": "https://github.com/MarkusIsaksson1982/agent-action-gate"
+ },
+ "files": [
+  "dist/src",
+  "src",
+  "fixtures",
+  "docs"
+ ],
+ "exports": {
+  ".": {
+   "types": "./dist/src/gate/index.d.ts",
+   "default": "./dist/src/gate/index.js"
+  }
  }
 }
