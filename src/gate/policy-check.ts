@@ -83,31 +83,51 @@ export function getArg(args: Record<string, unknown>, path: string): { present: 
 }
 
 const canon = (v: unknown): string | undefined => { try { return canonicalJson(v); } catch { return undefined; } };
-/** structural equality that ignores object key order */
-const deepEq = (a: unknown, b: unknown): boolean => { const x = canon(a); return x !== undefined && x === canon(b); };
 
-export function conditionHolds(c: ArgCondition, present: boolean, v: unknown): boolean {
-  if (c.exists !== undefined && c.exists !== present) return false;
-  if (!present) return c.exists === false || Object.keys(c).every((k) => k === 'exists' || k === 'ne' || k === 'notIn');
-  if ('eq' in c && !deepEq(v, c.eq)) return false;
-  if ('ne' in c && deepEq(v, c.ne)) return false;
-  if (c.in && !c.in.some((x) => deepEq(x, v))) return false;
-  if (c.notIn && c.notIn.some((x) => deepEq(x, v))) return false;
-  const num = typeof v === 'number' && Number.isFinite(v);
-  if (c.gt !== undefined && !(num && (v as number) > c.gt)) return false;
-  if (c.gte !== undefined && !(num && (v as number) >= c.gte)) return false;
-  if (c.lt !== undefined && !(num && (v as number) < c.lt)) return false;
-  if (c.lte !== undefined && !(num && (v as number) <= c.lte)) return false;
-  if (c.matches !== undefined && !(typeof v === 'string' && new RegExp('^(?:' + c.matches + ')$').test(v))) return false;
-  return true;
+/** Result of one condition: holds, fails, or unknown (argument missing for ne/notIn, or of a type the
+ *  operator cannot compare, e.g. "100000" against gt). Unknown is resolved fail-closed by ruleMatches. */
+export type ConditionStatus = 'holds' | 'fails' | 'unknown';
+
+export function conditionStatus(c: ArgCondition, present: boolean, v: unknown): ConditionStatus {
+  if (c.exists !== undefined && c.exists !== present) return 'fails';
+  if (!present) {
+    if ('ne' in c || 'notIn' in c) return 'unknown';
+    return Object.keys(c).every((k) => k === 'exists') ? 'holds' : 'fails';
+  }
+  const cv = canon(v);
+  if (cv === undefined && ('eq' in c || 'ne' in c || c.in || c.notIn)) return 'unknown';
+  let unknown = false;
+  if ('eq' in c && cv !== canon(c.eq)) return 'fails';
+  if ('ne' in c && cv === canon(c.ne)) return 'fails';
+  if (c.in && !c.in.some((x) => canon(x) === cv)) return 'fails';
+  if (c.notIn && c.notIn.some((x) => canon(x) === cv)) return 'fails';
+  const numOps = (['gt', 'gte', 'lt', 'lte'] as const).filter((k) => c[k] !== undefined);
+  if (numOps.length) {
+    if (!(typeof v === 'number' && Number.isFinite(v))) unknown = true;
+    else for (const k of numOps) {
+      const b = c[k]!; const ok = k === 'gt' ? v > b : k === 'gte' ? v >= b : k === 'lt' ? v < b : v <= b;
+      if (!ok) return 'fails';
+    }
+  }
+  if (c.matches !== undefined) {
+    if (typeof v !== 'string') unknown = true;
+    else if (!new RegExp('^(?:' + c.matches + ')$').test(v)) return 'fails';
+  }
+  return unknown ? 'unknown' : 'holds';
 }
 
+export function conditionHolds(c: ArgCondition, present: boolean, v: unknown): boolean { return conditionStatus(c, present, v) === 'holds'; }
+
+/** A rule matches when tool, role and all conditions hold. If a condition is 'unknown' (wrong type, or missing
+ *  argument for ne/notIn), a deny or require_approval rule still matches and an allow rule does not, so an agent
+ *  cannot dodge a limit by sending "100000" as a string or by omitting the argument (fail closed). */
 export function ruleMatches(rule: PolicyRule, call: ToolCall): boolean {
   if (!globToRegExp(rule.tool).test(call.tool)) return false;
   if (rule.roles && !(call.role !== undefined && rule.roles.includes(call.role))) return false;
   for (const [path, cond] of Object.entries(rule.when ?? {})) {
     const { present, value } = getArg(call.args, path);
-    if (!conditionHolds(cond, present, value)) return false;
+    const st = conditionStatus(cond, present, value);
+    if (st === 'fails' || (st === 'unknown' && rule.effect === 'allow')) return false;
   }
   return true;
 }
@@ -137,12 +157,13 @@ export function loadPolicy(raw: unknown): ToolPolicy {
     if (typeof rule.reason !== 'string' || rule.reason.trim() === '') fail(`rules[${i}].reason is required (it goes into the decision log)`);
     if (!ttlOk(rule.approvalTtlSec)) fail(`rules[${i}].approvalTtlSec must be a positive number of seconds`);
     if (rule.roles !== undefined && !(Array.isArray(rule.roles) && rule.roles.every((x) => typeof x === 'string'))) fail(`rules[${i}].roles must be an array of strings`);
-    if (rule.approvers !== undefined && !(Array.isArray(rule.approvers) && rule.approvers.every((x) => typeof x === 'string'))) fail(`rules[${i}].approvers must be an array of strings`);
+    if (rule.approvers !== undefined && !(Array.isArray(rule.approvers) && rule.approvers.length > 0 && rule.approvers.every((x) => typeof x === 'string'))) fail(`rules[${i}].approvers must be a non-empty array of strings`);
     if (rule.when !== undefined) {
       if (rule.when === null || typeof rule.when !== 'object') fail(`rules[${i}].when must be an object`);
       for (const [path, cond] of Object.entries(rule.when as object)) {
         if (cond === null || typeof cond !== 'object') fail(`rules[${i}].when.${path} must be an object`);
         const c = cond as Record<string, unknown>;
+        if (Object.keys(c).length === 0) fail(`rules[${i}].when.${path} has no operator`);
         for (const k of Object.keys(c)) if (!COND_KEYS.has(k)) fail(`rules[${i}].when.${path}: unknown operator "${k}"`);
         for (const k of ['in', 'notIn']) if (k in c && !Array.isArray(c[k])) fail(`rules[${i}].when.${path}.${k} must be an array`);
         for (const k of ['gt', 'gte', 'lt', 'lte']) if (k in c && !(typeof c[k] === 'number' && Number.isFinite(c[k]))) fail(`rules[${i}].when.${path}.${k} must be a number`);
@@ -172,6 +193,9 @@ export function approvalGate(policy: ToolPolicy, call: ToolCall): PolicyDecision
     const approverLists = deciding.filter((r) => r.approvers).map((r) => r.approvers!);
     // several approval rules: an approver must satisfy all of them (intersection)
     if (approverLists.length) d.approvers = approverLists.reduce((a, b) => a.filter((x) => b.includes(x)));
+    // nobody may approve under all deciding rules -> nobody can ever approve: deny instead of a dead request
+    if (d.approvers && d.approvers.length === 0)
+      return { ...d, effect: 'deny', reasons: [...d.reasons, 'no approver is allowed by every matching approval rule'] };
     const ttls = deciding.map((r) => r.approvalTtlSec).filter((t): t is number => t !== undefined);
     const ttl = ttls.length ? Math.min(...ttls) : policy.approvalTtlSec;
     if (ttl !== undefined) d.approvalTtlSec = ttl;

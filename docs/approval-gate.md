@@ -24,8 +24,13 @@ becomes "this agent has no tool permission for this tool".
 
 ## Conditions (`when`)
 Keys are dot paths into the tool arguments (`amount`, `target.env`). Operators: `eq`, `ne`, `in`, `notIn`, `gt`, `gte`, `lt`, `lte`,
-`matches` (anchored regex), `exists`. Numeric operators never coerce strings (`"10"` is not `> 5`). Missing arguments fail every operator
-except `ne`, `notIn` and `exists: false`. Only own properties are read, so `toString` or `__proto__` cannot be smuggled in.
+`matches` (anchored regex), `exists`. Numeric operators never coerce strings (`"10"` is not `> 5`).
+
+**Fail closed on unknowns.** A condition is *unknown* when the argument has a type the operator cannot compare
+(`"100000"` against `gt`, a number against `matches`, a non-JSON value) or when it is missing for `ne` / `notIn`.
+An unknown condition makes a `deny` or `require_approval` rule match and an `allow` rule not match, so an agent cannot
+dodge a limit by sending the amount as a string or by leaving out `env`. Other operators on a missing argument simply fail
+(only `exists: false` holds). If several approval rules leave no common approver, the decision becomes `deny`. Only own properties are read, so `toString` or `__proto__` cannot be smuggled in.
 
 ## Validation
 `loadPolicy()` rejects unknown operators, invalid regexes, duplicate rule ids, unknown effects and rules without a `reason`

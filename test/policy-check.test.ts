@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { approvalGate, loadPolicy, globToRegExp, getArg, conditionHolds, PolicyError, type ToolCall } from '../src/gate/index.js';
+import { approvalGate, loadPolicy, globToRegExp, getArg, conditionHolds, conditionStatus, PolicyError, type ToolCall } from '../src/gate/index.js';
 
 const fx = (p: string) => JSON.parse(readFileSync(new URL('../../fixtures/' + p, import.meta.url), 'utf8'));
 const payments = loadPolicy(fx('policies/payments-refund.policy.json'));
@@ -57,7 +57,7 @@ test('conditions: operators, nested paths, absent arguments, prototype keys', ()
   assert.deepEqual(getArg({}, 'toString'), { present: false, value: undefined });
   assert.equal(conditionHolds({ gt: 5 }, true, '10'), false, 'string is not a number');
   assert.equal(conditionHolds({ gt: 5 }, false, undefined), false);
-  assert.equal(conditionHolds({ ne: 'x' }, false, undefined), true);
+  assert.equal(conditionHolds({ ne: 'x' }, false, undefined), false, 'missing arg is unknown for ne');
   assert.equal(conditionHolds({ exists: false }, false, undefined), true);
   assert.equal(conditionHolds({ exists: true }, false, undefined), false);
   assert.equal(conditionHolds({ in: [1, 2] }, true, 2), true);
@@ -110,4 +110,28 @@ test('loadPolicy: operand types, unknown fields (typos), max approval TTL', () =
 test('conditions: eq / in ignore object key order', () => {
   assert.equal(conditionHolds({ eq: { a: 1, b: 2 } }, true, { b: 2, a: 1 }), true);
   assert.equal(conditionHolds({ notIn: [{ a: 1, b: 2 }] }, true, { b: 2, a: 1 }), false);
+});
+
+test('fail closed: wrong-typed or missing arguments cannot dodge deny / require_approval rules', () => {
+  const p = loadPolicy({ version: 1, defaultEffect: 'allow', rules: [
+    { id: 'cap', tool: 'pay', effect: 'deny', when: { amount: { gt: 1000 } }, reason: 'cap' },
+    { id: 'ok-env', tool: 'deploy', effect: 'allow', when: { env: { ne: 'prod' } }, reason: 'non-prod' },
+    { id: 'prod', tool: 'deploy', effect: 'require_approval', when: { env: { notIn: ['dev', 'staging'] } }, reason: 'maybe prod' }] });
+  const eff = (tool: string, args: Record<string, unknown>) => approvalGate(p, { tool, agent: 'a', args }).effect;
+  assert.equal(eff('pay', { amount: '100000' }), 'deny', 'string amount still hits the cap');
+  assert.equal(eff('pay', { amount: 5 }), 'allow');
+  assert.equal(eff('deploy', {}), 'require_approval', 'omitted env does not satisfy ne/notIn allow');
+  assert.equal(eff('deploy', { env: 'dev' }), 'allow');
+  assert.equal(conditionStatus({ gt: 1 }, true, '5'), 'unknown');
+  assert.equal(conditionStatus({ ne: 1 }, true, 10n), 'unknown');
+  assert.equal(conditionStatus({ matches: 'a' }, true, 1), 'unknown');
+});
+
+test('empty approver intersection denies; empty when / approvers rejected', () => {
+  const p = loadPolicy({ version: 1, rules: [
+    { id: 'a', tool: 't', effect: 'require_approval', reason: 'ra', approvers: ['x'] },
+    { id: 'b', tool: 't', effect: 'require_approval', reason: 'rb', approvers: ['y'] }] });
+  assert.equal(approvalGate(p, { tool: 't', agent: 'a', args: {} }).effect, 'deny');
+  assert.throws(() => loadPolicy({ version: 1, rules: [{ id: 'a', tool: 't', effect: 'allow', reason: 'r', when: { x: {} } }] }), /no operator/);
+  assert.throws(() => loadPolicy({ version: 1, rules: [{ id: 'a', tool: 't', effect: 'require_approval', reason: 'r', approvers: [] }] }), /non-empty/);
 });

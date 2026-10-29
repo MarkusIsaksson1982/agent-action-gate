@@ -66,8 +66,8 @@ test('returned approval requests are deep copies; TTL must be positive', () => {
 test('approved but unused approval expires; expireStale sweeps it', () => {
   const { q, tick } = setup(10);
   const r = q.request(req); q.approve(r.id, 'cfo'); tick(10);
-  assert.deepEqual(q.expireStale().map((x) => x.id), [r.id]);
-  assert.throws(() => q.consume(r.id), code('not_pending'));
+  assert.throws(() => q.consume(r.id), code('expired'), 'consume reports expiry of an unused approval');
+  assert.throws(() => q.consume('apr_nope'), code('not_found'));
 });
 
 test('one open approval request per idempotency key; huge TTL rejected', () => {

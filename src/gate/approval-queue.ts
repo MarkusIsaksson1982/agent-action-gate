@@ -96,7 +96,10 @@ export class PendingApprovalQueue {
   /** An approval is single-use: the guard consumes it when it executes the tool call. */
   consume(id: string): ApprovalRequest {
     const r = this.requests.get(id);
-    if (!r || this.refresh(r) !== 'approved') throw new ApprovalError('not_pending', `approval request ${id} is not approved`);
+    if (!r) throw new ApprovalError('not_found', `no approval request ${id}`);
+    const st = this.refresh(r);
+    if (st === 'expired') throw new ApprovalError('expired', `approval request ${id} expired before it was used`);
+    if (st !== 'approved') throw new ApprovalError('not_pending', `approval request ${id} is ${st}, not approved`);
     r.status = 'consumed'; this.emit('approval.consumed', r);
     return structuredClone(r);
   }
