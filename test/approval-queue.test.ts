@@ -53,3 +53,19 @@ test('deny, unknown id, args are copied', () => {
   assert.throws(() => q.approve('apr_nope', 'x'), code('not_found'));
   assert.equal(q.get('apr_nope'), undefined);
 });
+
+test('returned approval requests are deep copies; TTL must be positive', () => {
+  const { q } = setup();
+  const r = q.request({ ...req, args: { nested: { amount: 1 } } });
+  (r.args.nested as { amount: number }).amount = 9; r.reasons.push('x');
+  assert.deepEqual(q.get(r.id)!.args, { nested: { amount: 1 } }); assert.deepEqual(q.get(r.id)!.reasons, ['big']);
+  assert.throws(() => q.request({ ...req, ttlSec: -1 }), RangeError);
+  assert.throws(() => new PendingApprovalQueue({ defaultTtlSec: 0 }), RangeError);
+});
+
+test('approved but unused approval expires; expireStale sweeps it', () => {
+  const { q, tick } = setup(10);
+  const r = q.request(req); q.approve(r.id, 'cfo'); tick(10);
+  assert.deepEqual(q.expireStale().map((x) => x.id), [r.id]);
+  assert.throws(() => q.consume(r.id), code('not_pending'));
+});

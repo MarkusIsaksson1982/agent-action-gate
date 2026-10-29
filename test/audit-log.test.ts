@@ -75,3 +75,16 @@ test('canonical JSON: key order independent, rejects non-finite numbers', () => 
   assert.throws(() => canonicalJson({ a: NaN }), /non-finite/);
   assert.throws(() => canonicalJson({ a: () => 1 }), /unsupported/);
 });
+
+test('audit log: second writer on the same file is refused instead of forking the chain', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'aag-')), 'audit.jsonl');
+  const a = new AuditLog({ path }); a.append('x', 1);
+  const b = new AuditLog({ path }); b.append('x', 2);
+  assert.throws(() => a.append('x', 3), /changed on disk/);
+  assert.equal(verifyHashChain(readFileSync(path, 'utf8')).ok, true);
+});
+
+test('hash chain verify: duplicate seq numbers are a gap', () => {
+  const lines = fx('valid.jsonl').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(verifyHashChain([lines[0], lines[1], lines[1]]).issues[0]!.code, 'seq_gap');
+});

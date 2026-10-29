@@ -32,33 +32,40 @@ export class PendingApprovalQueue {
   private readonly requests = new Map<string, ApprovalRequest>();
   private readonly byKey = new Map<string, string>();
   private readonly ttl: number; private readonly now: () => number;
-  private readonly onEvent: (e: ApprovalEvent) => void; private readonly newId: () => string;
+  private readonly listeners: ((e: ApprovalEvent) => void)[] = []; private readonly newId: () => string;
   private counter = 0;
 
   constructor(o: QueueOptions = {}) {
-    this.ttl = o.defaultTtlSec ?? 900; this.now = o.now ?? Date.now; this.onEvent = o.onEvent ?? (() => {});
+    this.ttl = o.defaultTtlSec ?? 900; this.now = o.now ?? Date.now; if (o.onEvent) this.listeners.push(o.onEvent);
+    if (!(Number.isFinite(this.ttl) && this.ttl > 0)) throw new RangeError('defaultTtlSec must be a positive number');
     this.newId = o.newId ?? (() => `apr_${(++this.counter).toString().padStart(6, '0')}`);
   }
 
-  private emit(type: ApprovalEvent['type'], r: ApprovalRequest) { this.onEvent({ type, request: { ...r } }); }
+  /** Add a listener for approval lifecycle events (the guard uses this to write them to the audit log). */
+  subscribe(fn: (e: ApprovalEvent) => void): void { this.listeners.push(fn); }
 
-  /** Marks the request expired if its approval expiry has passed. Returns the current status. */
+  private emit(type: ApprovalEvent['type'], r: ApprovalRequest) { for (const l of this.listeners) l({ type, request: structuredClone(r) }); }
+
+  /** Marks the request expired if its approval expiry has passed. An approval that was granted but not used
+   *  before expiresAt expires too, so an approval never authorises a call indefinitely. */
   private refresh(r: ApprovalRequest): ApprovalStatus {
-    if (r.status === 'pending' && this.now() >= r.expiresAt) { r.status = 'expired'; this.emit('approval.expired', r); }
+    if ((r.status === 'pending' || r.status === 'approved') && this.now() >= r.expiresAt) { r.status = 'expired'; this.emit('approval.expired', r); }
     return r.status;
   }
 
   request(input: { tool: string; args: Record<string, unknown>; idempotencyKey: string; requestedBy: string; reasons: string[]; approvers?: string[]; ttlSec?: number }): ApprovalRequest {
+    const ttl = input.ttlSec ?? this.ttl;
+    if (!(Number.isFinite(ttl) && ttl > 0)) throw new RangeError('ttlSec must be a positive number');
     const t = this.now();
     const r: ApprovalRequest = { id: this.newId(), tool: input.tool, args: structuredClone(input.args), idempotencyKey: input.idempotencyKey,
-      requestedBy: input.requestedBy, reasons: input.reasons, createdAt: t, expiresAt: t + (input.ttlSec ?? this.ttl) * 1000, status: 'pending' };
-    if (input.approvers) r.approvers = input.approvers;
+      requestedBy: input.requestedBy, reasons: [...input.reasons], createdAt: t, expiresAt: t + ttl * 1000, status: 'pending' };
+    if (input.approvers) r.approvers = [...input.approvers];
     this.requests.set(r.id, r); this.byKey.set(r.idempotencyKey, r.id);
     this.emit('approval.requested', r);
-    return { ...r };
+    return structuredClone(r);
   }
 
-  get(id: string): ApprovalRequest | undefined { const r = this.requests.get(id); if (!r) return undefined; this.refresh(r); return { ...r }; }
+  get(id: string): ApprovalRequest | undefined { const r = this.requests.get(id); if (!r) return undefined; this.refresh(r); return structuredClone(r); }
 
   /** Latest approval request for an idempotency key (how a retried tool call finds its approval). */
   findByIdempotencyKey(key: string): ApprovalRequest | undefined { const id = this.byKey.get(key); return id ? this.get(id) : undefined; }
@@ -74,7 +81,7 @@ export class PendingApprovalQueue {
     r.status = approve ? 'approved' : 'denied'; r.decidedBy = by; r.decidedAt = this.now();
     if (note !== undefined) r.note = note;
     this.emit(approve ? 'approval.approved' : 'approval.denied', r);
-    return { ...r };
+    return structuredClone(r);
   }
 
   approve(id: string, approver: string, note?: string): ApprovalRequest { return this.decide(id, approver, true, note); }
@@ -85,15 +92,15 @@ export class PendingApprovalQueue {
     const r = this.requests.get(id);
     if (!r || this.refresh(r) !== 'approved') throw new ApprovalError('not_pending', `approval request ${id} is not approved`);
     r.status = 'consumed'; this.emit('approval.consumed', r);
-    return { ...r };
+    return structuredClone(r);
   }
 
   /** Sweep: mark every pending request past its approval expiry as expired. Returns the expired ones. */
   expireStale(): ApprovalRequest[] {
     const out: ApprovalRequest[] = [];
-    for (const r of this.requests.values()) if (r.status === 'pending' && this.refresh(r) === 'expired') out.push({ ...r });
+    for (const r of this.requests.values()) if ((r.status === 'pending' || r.status === 'approved') && this.refresh(r) === 'expired') out.push(structuredClone(r));
     return out;
   }
 
-  pending(): ApprovalRequest[] { return [...this.requests.values()].filter((r) => this.refresh(r) === 'pending').map((r) => ({ ...r })); }
+  pending(): ApprovalRequest[] { return [...this.requests.values()].filter((r) => this.refresh(r) === 'pending').map((r) => (structuredClone(r))); }
 }

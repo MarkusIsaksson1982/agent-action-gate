@@ -2,7 +2,7 @@
 // Each entry carries seq, ts, type, data, prevHash and hash = sha256(canonicalJson({seq, ts, type, data, prevHash})).
 // verifyHashChain() re-computes every hash and reports tampered entries, sequence gaps, reordering, broken links,
 // unparseable lines and (when you pass a previously recorded head) truncation of the tail.
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { canonicalJson, sha256Hex } from './canonical-json.js';
 
 export const GENESIS_HASH = '0'.repeat(64);
@@ -58,12 +58,15 @@ export function verifyHashChain(input: string | AuditEntry[], opts: VerifyOption
 
 export interface AuditLogOptions { path?: string; now?: () => Date }
 
-/** Append-only audit log. With `path`, every append is written synchronously to a JSONL file (O_APPEND). */
+/** Append-only audit log. With `path`, every append is written synchronously to a JSONL file (O_APPEND).
+ *  Single writer: one AuditLog instance per file. If another writer appended in between, append() throws instead of
+ *  forking the hash chain. */
 export class AuditLog {
   private entries: AuditEntry[] = [];
   private head = GENESIS_HASH;
   private readonly path: string | undefined;
   private readonly now: () => Date;
+  private bytes = 0;
 
   constructor(opts: AuditLogOptions = {}) {
     this.path = opts.path; this.now = opts.now ?? (() => new Date());
@@ -72,14 +75,20 @@ export class AuditLog {
       const v = verifyHashChain(text);
       if (!v.ok) throw new Error(`refusing to append to a broken audit log ${this.path}: ${v.issues[0]!.code} at line ${v.issues[0]!.line}`);
       this.entries = text.split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as AuditEntry);
-      this.head = v.head;
+      this.head = v.head; this.bytes = Buffer.byteLength(text, 'utf8');
     }
   }
 
   append<D>(type: string, data: D): AuditEntry<D> {
     const base = { seq: this.entries.length, ts: this.now().toISOString(), type, data, prevHash: this.head };
     const entry: AuditEntry<D> = { ...base, hash: hashAuditEntry(base) };
-    if (this.path) appendFileSync(this.path, JSON.stringify(entry) + '\n', { encoding: 'utf8', flag: 'a' });
+    if (this.path) {
+      const size = existsSync(this.path) ? statSync(this.path).size : 0;
+      if (size !== this.bytes) throw new Error(`audit log ${this.path} changed on disk (another writer?); expected ${this.bytes} bytes, found ${size}`);
+      const line = JSON.stringify(entry) + '\n';
+      appendFileSync(this.path, line, { encoding: 'utf8', flag: 'a' });
+      this.bytes += Buffer.byteLength(line, 'utf8');
+    }
     this.entries.push(entry); this.head = entry.hash;
     return entry;
   }

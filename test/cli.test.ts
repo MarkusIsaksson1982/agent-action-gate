@@ -36,3 +36,9 @@ test('cli lint and usage errors', () => {
   assert.equal(bad.code, 2); assert.match(bad.err, /invalid policy: .*greaterThan/);
   assert.equal(run().code, 2); assert.equal(run('verify', '/no/such/file').code, 2);
 });
+
+test('cli: malformed --count/--head and invalid call shape are usage errors (exit 2)', () => {
+  assert.equal(run('verify', F + 'audit-logs/valid.jsonl', '--count', 'xyz').code, 2);
+  assert.equal(run('verify', F + 'audit-logs/valid.jsonl', '--head').code, 2);
+  assert.equal(run('check', F + 'policies/payments-refund.policy.json', F + 'policies/email-send.policy.json').code, 2);
+});

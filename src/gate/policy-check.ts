@@ -110,6 +110,8 @@ export function loadPolicy(raw: unknown): ToolPolicy {
   const p = raw as Record<string, unknown>;
   if (p.version !== 1) fail('policy.version must be 1');
   if (p.defaultEffect !== undefined && !EFFECTS.has(p.defaultEffect as Effect)) fail('policy.defaultEffect is invalid');
+  const ttlOk = (v: unknown) => v === undefined || (typeof v === 'number' && Number.isFinite(v) && v > 0);
+  if (!ttlOk(p.approvalTtlSec)) fail('policy.approvalTtlSec must be a positive number of seconds');
   if (!Array.isArray(p.rules)) fail('policy.rules must be an array');
   const ids = new Set<string>();
   (p.rules as unknown[]).forEach((r, i) => {
@@ -121,6 +123,9 @@ export function loadPolicy(raw: unknown): ToolPolicy {
     if (typeof rule.tool !== 'string' || rule.tool === '') fail(`rules[${i}].tool must be a non-empty string`);
     if (!EFFECTS.has(rule.effect as Effect)) fail(`rules[${i}].effect must be allow, deny or require_approval`);
     if (typeof rule.reason !== 'string' || rule.reason.trim() === '') fail(`rules[${i}].reason is required (it goes into the decision log)`);
+    if (!ttlOk(rule.approvalTtlSec)) fail(`rules[${i}].approvalTtlSec must be a positive number of seconds`);
+    if (rule.roles !== undefined && !(Array.isArray(rule.roles) && rule.roles.every((x) => typeof x === 'string'))) fail(`rules[${i}].roles must be an array of strings`);
+    if (rule.approvers !== undefined && !(Array.isArray(rule.approvers) && rule.approvers.every((x) => typeof x === 'string'))) fail(`rules[${i}].approvers must be an array of strings`);
     if (rule.when !== undefined) {
       if (rule.when === null || typeof rule.when !== 'object') fail(`rules[${i}].when must be an object`);
       for (const [path, cond] of Object.entries(rule.when as object)) {

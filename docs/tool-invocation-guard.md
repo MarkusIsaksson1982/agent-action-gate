@@ -17,7 +17,7 @@ switch (r.status) { case 'executed': case 'duplicate': /* r.result */ case 'pend
 1. **Policy** (`approvalGate`) – `deny` returns immediately; the tool never runs.
 2. **Idempotency** – completed key → `duplicate` with the first result; running key → `in_flight`; same key, different args → `denied`.
 3. **Approval** (`require_approval` only) – no request yet → create one → `pending_approval`; pending → `pending_approval` (same id);
-   denied by a human → `denied`; expired → log `approval_expired` and create a fresh request; approved → consume and run.
+   denied by a human → `denied`; expired → log `approval_expired` and create a fresh request; approved → consume and run. A pending/approved request whose tool or arguments differ from this call → `denied` (approval is bound to the payload).
 4. **Execute** – result stored under the key; a thrown error → `failed` and the key is released for a retry.
 5. **Decision log** – one `decision` entry per invocation in the hash-chained audit log.
 

@@ -17,6 +17,9 @@ export function runCli(argv: string[], io: CliIo = { out: (s) => process.stdout.
   try {
     if (cmd === 'verify' && pos[0]) {
       const head = flag(rest, '--head'); const count = flag(rest, '--count');
+      if ((rest.includes('--head') && !/^[0-9a-f]{64}$/.test(head ?? '')) || (rest.includes('--count') && !/^[0-9]+$/.test(count ?? ''))) {
+        io.err('--head needs a 64-char hex hash and --count a non-negative integer'); return 2;
+      }
       const r = verifyHashChain(readFileSync(pos[0], 'utf8'), { ...(head ? { expectedHead: head } : {}), ...(count ? { expectedCount: Number(count) } : {}) });
       if (json) io.out(JSON.stringify(r));
       else if (r.ok) io.out(`OK ${r.entries} entries, head ${r.head}`);
@@ -25,7 +28,11 @@ export function runCli(argv: string[], io: CliIo = { out: (s) => process.stdout.
     }
     if (cmd === 'check' && pos[0] && pos[1]) {
       const policy = loadPolicy(JSON.parse(readFileSync(pos[0], 'utf8')));
-      const d = approvalGate(policy, JSON.parse(readFileSync(pos[1], 'utf8')) as ToolCall);
+      const call = JSON.parse(readFileSync(pos[1], 'utf8')) as ToolCall;
+      if (!call || typeof call.tool !== 'string' || typeof call.agent !== 'string' || !call.args || typeof call.args !== 'object') {
+        io.err('call.json must be {"tool": string, "agent": string, "role"?: string, "args": object}'); return 2;
+      }
+      const d = approvalGate(policy, call);
       io.out(json ? JSON.stringify(d) : `${d.effect}${d.decidingRules.length ? ' [' + d.decidingRules.join(', ') + ']' : ''}: ${d.reasons.join('; ')}`);
       return d.effect === 'allow' ? 0 : d.effect === 'require_approval' ? 3 : 4;
     }

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { ToolInvocationGuard, loadPolicy, verifyHashChain, explainDecision, type DecisionLogEntry } from '../src/gate/index.js';
+import { ToolInvocationGuard, PendingApprovalQueue, loadPolicy, verifyHashChain, explainDecision, type DecisionLogEntry } from '../src/gate/index.js';
 
 const policy = loadPolicy(JSON.parse(readFileSync(new URL('../../fixtures/policies/payments-refund.policy.json', import.meta.url), 'utf8')));
 
@@ -101,4 +101,29 @@ test('decision log does not store raw args, only their hash', async () => {
   await refund({ orderId: 'secret-order', amount: 1, currency: 'SEK' }, ctx);
   assert.equal(guard.audit.toJsonl().includes('secret-order'), false);
   assert.match((guard.audit.all()[0]!.data as DecisionLogEntry).argsHash, /^[0-9a-f]{64}$/);
+});
+
+test('approval is bound to the approved tool arguments: same key, different payload is denied', async () => {
+  const { guard, refund, calls } = setup();
+  const p = await refund({ orderId: 'o6', amount: 600, currency: 'SEK' }, { ...ctx, idempotencyKey: 'call_x' });
+  guard.queue.approve(p.status === 'pending_approval' ? p.approvalRequestId : '', 'cfo');
+  const r = await refund({ orderId: 'o6', amount: 19000, currency: 'SEK' }, { ...ctx, idempotencyKey: 'call_x' });
+  assert.equal(r.status, 'denied'); assert.match(r.decision.reasons[0]!, /different tool arguments/); assert.equal(calls(), 0);
+  assert.equal((await refund({ orderId: 'o6', amount: 600, currency: 'SEK' }, { ...ctx, idempotencyKey: 'call_x' })).status, 'executed');
+});
+
+test('approval expiry also applies to an approved but unused approval', async () => {
+  const { guard, refund, calls, tick } = setup();
+  const a = { orderId: 'o7', amount: 700, currency: 'SEK' };
+  const p = await refund(a, ctx);
+  guard.queue.approve(p.status === 'pending_approval' ? p.approvalRequestId : '', 'cfo');
+  tick(601);
+  assert.equal((await refund(a, ctx)).status, 'pending_approval'); assert.equal(calls(), 0);
+});
+
+test('injected PendingApprovalQueue events are still written to the audit log', async () => {
+  const queue = new PendingApprovalQueue({ defaultTtlSec: 60 });
+  const guard = new ToolInvocationGuard({ policy, queue });
+  await guard.invoke({ tool: 'payments.refund', agent: 'a', role: 'support_agent', args: { amount: 900 } }, () => 1);
+  assert.deepEqual(guard.audit.all().map((e) => e.type), ['approval.requested', 'decision']);
 });

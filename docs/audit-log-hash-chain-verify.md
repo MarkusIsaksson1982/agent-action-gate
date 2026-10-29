@@ -29,6 +29,10 @@ verifyHashChain(fs.readFileSync('audit.jsonl', 'utf8'), { expectedHead: savedHea
 A hash chain alone cannot detect someone rewriting **every** entry from some point onward, or cutting off the tail. Anchor the head:
 store `audit.headHash` somewhere the agent cannot write (a separate DB, a signed checkpoint, a git commit) and verify with `--head`.
 
+## Single writer
+One `AuditLog` instance per file. Before each append it checks the file size it last wrote; if another process appended in between,
+`append()` throws (`changed on disk`) instead of forking the hash chain. Several workers should send entries to one writer.
+
 ## CLI
 ```bash
 agent-action-gate verify fixtures/audit-logs/valid.jsonl                   # OK 6 entries, head ae67…   (exit 0)

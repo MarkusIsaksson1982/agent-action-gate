@@ -91,3 +91,10 @@ test('approval gate: two approval rules -> approvers intersect, min TTL', () => 
   const d = approvalGate(p, { tool: 't', agent: 'a', args: {} });
   assert.deepEqual(d.approvers, ['y']); assert.equal(d.approvalTtlSec, 50); assert.deepEqual(d.reasons, ['ra', 'rb']);
 });
+
+test('loadPolicy: approval expiry TTLs must be positive, roles/approvers string arrays', () => {
+  assert.throws(() => loadPolicy({ version: 1, approvalTtlSec: -5, rules: [] }), /approvalTtlSec/);
+  assert.throws(() => loadPolicy({ version: 1, rules: [{ id: 'a', tool: 't', effect: 'require_approval', reason: 'r', approvalTtlSec: 'soon' }] }), /approvalTtlSec/);
+  assert.throws(() => loadPolicy({ version: 1, rules: [{ id: 'a', tool: 't', effect: 'allow', reason: 'r', roles: 'admin' }] }), /roles/);
+  assert.throws(() => loadPolicy({ version: 1, rules: [{ id: 'a', tool: 't', effect: 'require_approval', reason: 'r', approvers: [1] }] }), /approvers/);
+});

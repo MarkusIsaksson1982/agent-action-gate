@@ -38,9 +38,10 @@ export class ToolInvocationGuard {
     this.policy = o.policy;
     this.audit = o.audit ?? new AuditLog(o.now ? { now: () => new Date(o.now!()) } : {});
     const ttl = o.policy.approvalTtlSec;
-    this.queue = o.queue ?? new PendingApprovalQueue({ ...(ttl !== undefined ? { defaultTtlSec: ttl } : {}), ...(o.now ? { now: o.now } : {}),
-      onEvent: (e) => this.audit.append(e.type, { id: e.request.id, tool: e.request.tool, status: e.request.status, idempotencyKey: e.request.idempotencyKey,
-        ...(e.request.decidedBy ? { decidedBy: e.request.decidedBy } : {}), expiresAt: new Date(e.request.expiresAt).toISOString() }) });
+    this.queue = o.queue ?? new PendingApprovalQueue({ ...(ttl !== undefined ? { defaultTtlSec: ttl } : {}), ...(o.now ? { now: o.now } : {}) });
+    // approval lifecycle events always go to the audit log, also for an injected queue
+    this.queue.subscribe((e) => this.audit.append(e.type, { id: e.request.id, tool: e.request.tool, status: e.request.status, idempotencyKey: e.request.idempotencyKey,
+        ...(e.request.decidedBy ? { decidedBy: e.request.decidedBy } : {}), expiresAt: new Date(e.request.expiresAt).toISOString() }));
     this.idempotency = o.idempotency ?? new IdempotencyStore(undefined, o.now);
   }
 
@@ -72,6 +73,12 @@ export class ToolInvocationGuard {
     let approvedBy: string | undefined; let approvalRequestId: string | undefined;
     if (d.effect === 'require_approval') {
       const existing = this.queue.findByIdempotencyKey(key);
+      if (existing && existing.status !== 'expired' && existing.status !== 'consumed'
+          && (existing.tool !== call.tool || canonicalJson(existing.args) !== canonicalJson(call.args))) {
+        // an approval covers exactly the tool + arguments a human saw; reusing its key for another payload is refused
+        return { status: 'denied', decision: this.log(call, key, argsHash, d, 'denied', { approvalRequestId: existing.id,
+          reasons: [`idempotency key ${key} belongs to approval request ${existing.id} for different tool arguments`] }) };
+      }
       if (existing?.status === 'approved') {
         approvalRequestId = existing.id; approvedBy = existing.decidedBy;
       } else if (existing?.status === 'pending') {
@@ -88,10 +95,11 @@ export class ToolInvocationGuard {
       }
     }
 
-    this.idempotency.begin(key, fingerprint);
-    if (approvalRequestId) this.queue.consume(approvalRequestId);
     const extra = { ...(approvalRequestId ? { approvalRequestId } : {}), ...(approvedBy ? { approvedBy } : {}) };
+    try { this.idempotency.begin(key, fingerprint); }
+    catch (err) { return { status: 'failed', error: String(err), decision: this.log(call, key, argsHash, d, 'failed', { ...extra, error: String(err) }) }; }
     try {
+      if (approvalRequestId) this.queue.consume(approvalRequestId);
       const result = await fn(call.args);
       this.idempotency.complete(key, result);
       return { status: 'executed', result, decision: this.log(call, key, argsHash, d, 'executed', extra) };
