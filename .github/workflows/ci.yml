@@ -3,9 +3,20 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix: { node-version: [20, 22, 24] }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm }
+        with: { node-version: "${{ matrix.node-version }}", cache: npm }
       - run: npm ci
       - run: npm test
+      - name: verify audit-log fixtures with the CLI
+        run: |
+          node dist/src/cli.js verify fixtures/audit-logs/valid.jsonl --head "$(cat fixtures/audit-logs/valid.head.txt)"
+          for f in fixtures/audit-logs/tampered-*.jsonl; do
+            if node dist/src/cli.js verify "$f" --head "$(cat fixtures/audit-logs/valid.head.txt)"; then echo "::error::$f not detected"; exit 1; fi
+          done
+      - run: npm run example
+      - name: fixtures are reproducible
+        run: npm run fixtures && git diff --exit-code fixtures/
