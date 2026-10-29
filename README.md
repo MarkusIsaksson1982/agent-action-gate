@@ -2,29 +2,87 @@
 
 [![CI](https://github.com/MarkusIsaksson1982/agent-action-gate/actions/workflows/ci.yml/badge.svg)](https://github.com/MarkusIsaksson1982/agent-action-gate/actions/workflows/ci.yml)
 
-A small, dependency-free **strict TypeScript** gate between an LLM agent and a backend that acts on its behalf –
-with a fullstack web-operations demo (node:http API + TypeScript frontend) on top.
-The agent proposes an action (tool + JSON args + rationale + idempotency key); the gate decides:
+**Use when an LLM agent's tool calls need an approval gate in TypeScript:** a policy check before every tool call
+(allow / deny / require_approval per tool), a human-in-the-loop approval queue with approval expiry, idempotency keys that
+dedupe repeated tool calls, and an append-only, hash-chained JSONL audit log with a `verify` CLI that detects tampering and gaps.
 
-| decision | when | HTTP (Lambda-style `handler`) |
-|---|---|---|
-| `duplicate` | idempotency key already accepted (agent retries are safe) | 200 |
-| `reject` | typed errors: unknown tool, role not allowed, missing/unknown field, wrong type, out of range, pattern mismatch, over hard limit, empty rationale | 422 |
-| `needs_approval` | valid, but the amount is above the tool's approval threshold → a human signs off | 202 |
-| `execute` | valid and within limits | 200 |
+Dependency-free strict TypeScript (only `node:crypto` / `node:fs`), Node ≥ 20, MIT.
 
-Every decision is appended to a **hash-chained audit log** (`verifyLog` returns the first tampered index), and `evaluate` replays
-recorded agent proposals against expected decisions, counting **unsafe executes** (the metric that matters most).
-
-Why: in an agentic-first backend the model is one step in a pipeline; the deterministic parts around it (schemas, limits,
-idempotency, approval, audit) decide whether that is safe. Typed errors can be fed back to the agent for a bounded retry.
-
+## Quick start
 ```bash
-npm i -D typescript @types/node   # only dev dependencies
-npx tsc -p . && node --test dist/test/ && node dist/src/demo.js
+git clone https://github.com/MarkusIsaksson1982/agent-action-gate && cd agent-action-gate
+npm ci && npm test            # builds + runs the node:test suite
+npm run example               # an agent tool calling loop through the gate
+node dist/src/cli.js verify fixtures/audit-logs/tampered-deleted-entry.jsonl   # TAMPERED … seq_gap (exit 1)
 ```
 
-## v0.2: fullstack web-operations demo
+```ts
+import { ToolInvocationGuard, AuditLog, loadPolicy } from 'agent-action-gate';
+
+const policy = loadPolicy(JSON.parse(readFileSync('fixtures/policies/payments-refund.policy.json', 'utf8')));
+const guard = new ToolInvocationGuard({ policy, audit: new AuditLog({ path: 'audit.jsonl' }) });
+const refund = guard.wrap('payments.refund', (a: { orderId: string; amount: number; currency: string }) => doRefund(a));
+
+const r = await refund({ orderId: 'o2', amount: 4200, currency: 'SEK' }, { agent: 'support-bot-1', role: 'support_agent', idempotencyKey: toolCall.id });
+// r.status: 'executed' | 'duplicate' | 'denied' | 'pending_approval' | 'in_flight' | 'failed'
+if (r.status === 'pending_approval') guard.queue.approve(r.approvalRequestId, 'finance-lead'); // a human, later
+// the agent re-sends the same tool call (same idempotency key) -> executed once, approval consumed
+```
+
+## Concepts
+| concept | API | doc |
+|---|---|---|
+| Approval gate: policy check before call | `approvalGate(policy, call)`, `loadPolicy()` | [docs/approval-gate.md](docs/approval-gate.md), [docs/policy-format.md](docs/policy-format.md) |
+| Tool permission rules per tool / role / argument | `rules[].tool` glob, `roles`, `when` | [docs/policy-format.md](docs/policy-format.md) |
+| Human in the loop approval request + approval expiry | `PendingApprovalQueue` | [docs/human-in-the-loop-approval-queue.md](docs/human-in-the-loop-approval-queue.md) |
+| Idempotency key (dedupe repeated tool calls) | `idempotencyKey()`, `IdempotencyStore` | [docs/idempotency-key.md](docs/idempotency-key.md) |
+| Audit log (append-only, hash chain verify) | `AuditLog`, `verifyHashChain()`, CLI `verify` | [docs/audit-log-hash-chain-verify.md](docs/audit-log-hash-chain-verify.md) |
+| Decision log entries with reasons | `DecisionLogEntry`, `explainDecision()` | [docs/decision-log.md](docs/decision-log.md) |
+| Tool invocation guard for agent tool calls | `ToolInvocationGuard.invoke()/wrap()` | [docs/tool-invocation-guard.md](docs/tool-invocation-guard.md) |
+
+Decision rule: all matching rules count and the most restrictive wins (deny > require_approval > allow); no match → `defaultEffect`, which
+defaults to deny (fail closed). Agents can never approve their own requests; approvals are single-use and expire.
+
+## CLI
+```
+agent-action-gate verify <audit.jsonl> [--head <hash>] [--count <n>] [--json]   exit 0 ok · 1 tampered · 2 usage
+agent-action-gate check  <policy.json> <call.json> [--json]                      exit 0 allow · 3 require_approval · 4 deny
+agent-action-gate lint   <policy.json>
+```
+
+## Layout
+```
+src/gate/policy-check.ts          approvalGate, loadPolicy, rule matching
+src/gate/approval-queue.ts        PendingApprovalQueue (approval expiry, no self-approval, single-use)
+src/gate/idempotency-key.ts       idempotencyKey, IdempotencyStore
+src/gate/audit-log.ts             AuditLog (JSONL), verifyHashChain
+src/gate/decision-log.ts          DecisionLogEntry, explainDecision
+src/gate/tool-invocation-guard.ts ToolInvocationGuard
+src/cli.ts                        verify / check / lint
+fixtures/policies/                payments refund, devops shell/deploy, email send, an invalid policy
+fixtures/tool-calls/              sample agent tool calls
+fixtures/audit-logs/              valid.jsonl + tampered-{edited-entry,deleted-entry,reordered,truncated,bad-json}.jsonl
+examples/agent-tool-calling.ts    model tool_call -> guard -> tool_result
+src/action-gate.ts, src/server.ts v0.2 schema-validating gate + web-operations demo (below)
+```
+
+## Test queries (Xerj)
+These five queries should land on the files named in [XERJ-QUERIES.md](XERJ-QUERIES.md):
+1. `approval gate policy check before tool call allow deny require_approval`
+2. `human in the loop approval request expiry for agent tool calls`
+3. `idempotency key dedupe repeated agent tool calls`
+4. `hash chain verify tampered audit log jsonl`
+5. `tool invocation guard wrap agent tool function decision log`
+
+## Limits
+- In-memory queue and idempotency store (single process). For several workers, implement the same interface on Redis/Postgres.
+- A hash chain is tamper-*evident*, not tamper-proof: anchor the head hash outside the agent's reach (see the audit-log doc).
+- No MCP server adapter yet; wrap your MCP tool handlers with `guard.wrap()`.
+
+## v0.2: schema-validating gate and fullstack web-operations demo
+`src/action-gate.ts` (`validateProposal`, `decide`, `verifyLog`, `handler`, `evaluate`) validates typed tool arguments against a field schema
+with role checks, approval thresholds and hard limits, and replays recorded proposals counting **unsafe executes**.
+
 `npm start` → http://localhost:8787 – a TypeScript frontend (no framework) and a JSON API on `node:http`:
 
 | route | what it does |
