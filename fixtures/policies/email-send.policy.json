@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "name": "email-send",
+  "defaultEffect": "require_approval",
+  "approvalTtlSec": 3600,
+  "rules": [
+    { "id": "email-internal", "tool": "email.send", "effect": "allow", "when": { "to": { "matches": "[^@]+@example\\.com" } },
+      "reason": "internal email may be sent without review" },
+    { "id": "email-bulk-deny", "tool": "email.send", "effect": "deny", "when": { "recipientCount": { "gt": 50 } },
+      "reason": "bulk email from an agent is not allowed" },
+    { "id": "calendar-read", "tool": "calendar.list_events", "effect": "allow", "reason": "read-only calendar access" }
+  ]
+}

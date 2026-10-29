@@ -1,0 +1,1 @@
+{ "version": 1, "rules": [ { "id": "x", "tool": "a", "effect": "allow", "reason": "r", "when": { "n": { "greaterThan": 3 } } } ] }

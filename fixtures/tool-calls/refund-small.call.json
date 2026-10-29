@@ -1,0 +1,1 @@
+{ "tool": "payments.refund", "agent": "support-bot-1", "role": "support_agent", "args": { "orderId": "ord_1001", "amount": 120, "currency": "SEK" } }

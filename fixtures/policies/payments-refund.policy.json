@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "name": "payments-refund",
+  "defaultEffect": "deny",
+  "approvalTtlSec": 900,
+  "rules": [
+    { "id": "refund-small-allow", "tool": "payments.refund", "effect": "allow", "roles": ["support_agent"],
+      "when": { "amount": { "lte": 500 }, "currency": { "in": ["SEK", "EUR"] } },
+      "reason": "small refunds in SEK/EUR are within the support agent's tool permission" },
+    { "id": "refund-large-approval", "tool": "payments.refund", "effect": "require_approval", "roles": ["support_agent"],
+      "when": { "amount": { "gt": 500 } }, "approvers": ["finance-lead", "cfo"], "approvalTtlSec": 600,
+      "reason": "refunds above 500 need a human approval request to finance" },
+    { "id": "refund-hard-limit", "tool": "payments.refund", "effect": "deny",
+      "when": { "amount": { "gt": 20000 } }, "reason": "refunds above 20000 are never done by an agent" },
+    { "id": "payments-read", "tool": "payments.get_*", "effect": "allow", "reason": "read-only payment lookups are allowed" }
+  ]
+}

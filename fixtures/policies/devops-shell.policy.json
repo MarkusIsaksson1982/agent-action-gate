@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "name": "devops-shell",
+  "defaultEffect": "deny",
+  "approvalTtlSec": 300,
+  "rules": [
+    { "id": "shell-readonly", "tool": "shell.exec", "effect": "allow",
+      "when": { "command": { "matches": "(ls|cat|git status|git log)( .*)?" } }, "reason": "read-only shell commands" },
+    { "id": "shell-rm-rf", "tool": "shell.exec", "effect": "deny",
+      "when": { "command": { "matches": ".*rm -rf.*" } }, "reason": "recursive delete is blocked for agents" },
+    { "id": "deploy-staging", "tool": "deploy.*", "effect": "allow", "when": { "env": { "eq": "staging" } }, "reason": "staging deploys are self-service" },
+    { "id": "deploy-prod", "tool": "deploy.*", "effect": "require_approval", "when": { "env": { "eq": "production" } },
+      "approvers": ["oncall"], "reason": "production deploys need human in the loop sign-off from on-call" },
+    { "id": "db-drop", "tool": "db.drop_table", "effect": "deny", "reason": "destructive schema change" }
+  ]
+}
