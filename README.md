@@ -44,6 +44,20 @@ if (r.status === 'pending_approval') guard.queue.approve(r.approvalRequestId, 'f
 Decision rule: all matching rules count and the most restrictive wins (deny > require_approval > allow); no match → `defaultEffect`, which
 defaults to deny (fail closed). Agents can never approve their own requests; approvals are single-use and expire.
 
+## Example: teledermatology intake assistant
+[`fixtures/policies/teledermatology-intake.policy.json`](fixtures/policies/teledermatology-intake.policy.json) is a synthetic policy for an AI intake
+assistant in a store-and-forward teledermatology service (not clinical guidance). The AI may raise a case to urgent, route it to a
+dermatologist's queue and send fixed administrative messages (receipt, photo retake, missing answers). Putting a case in the routine
+queue needs an adult patient, an explicit "no red flag" answer and model confidence ≥ 0.85; a red flag, a missing answer, a child or low
+confidence goes to a dermatologist or triage nurse. Diagnoses, treatment advice, reassurance and free text to patients are denied,
+every prescription draft needs a dermatologist, isotretinoin is denied without a documented negative pregnancy status, and record
+export is always denied. Cases: [`test/teledermatology.test.ts`](test/teledermatology.test.ts).
+
+```bash
+echo '{"tool":"case.set_priority","agent":"intake-bot","role":"intake_agent","args":{"priority":"routine","patientAgeYears":34,"aiConfidence":0.93}}' > /tmp/c.json
+node dist/src/cli.js check fixtures/policies/teledermatology-intake.policy.json /tmp/c.json   # require_approval: red-flag answer missing (exit 3)
+```
+
 ## CLI
 ```
 agent-action-gate verify <audit.jsonl> [--head <hash>] [--count <n>] [--json]   exit 0 ok · 1 tampered · 2 usage
